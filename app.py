@@ -1,149 +1,138 @@
 """
-Fashion Store Manager v2.2
-Login fijo, edición con fotos, imágenes por defecto
+Fashion Store Manager v3.0 - Optimizado
+Cache, lazy loading, queries rápidas
 """
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
-from database import init_db
-from gestor import GestorProductos, GestorCategorias, GestorTransacciones
 from io import BytesIO
 import base64, os
 
-st.set_page_config(page_title="Fashion Store Manager", page_icon="👗", layout="wide")
+# ==== DB INIT (una sola vez) ====
+if 'db_ready' not in st.session_state:
+    from database import init_db
+    from gestor import GestorProductos, GestorCategorias, GestorTransacciones
+    init_db('tienda.db')
+    
+    # Seed
+    gc = GestorCategorias()
+    for n,d in [("Camisas","Blusas"),("Pantalones","Jeans"),("Vestidos","Vestidos"),
+                ("Zapatos","Calzado"),("Accesorios","Bolsos"),("Deportivo","Ropa dep."),
+                ("Abrigos","Chaquetas"),("Ropa Interior","Ropa int.")]:
+        try: gc.crear_categoria(n,d)
+        except: pass
+    
+    cats = gc.obtener_todas_categorias()
+    gp = GestorProductos()
+    if len(gp.obtener_todos_productos()) == 0 and cats:
+        IMGS = {
+            'Camisa Oxford Blanca':'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=400',
+            'Jeans Slim Fit':'https://images.unsplash.com/photo-1542272454315-4c01d7abdf4a?w=400',
+            'Vestido Floral Verano':'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=400',
+            'Zapatillas Running':'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400',
+            'Bolso de Cuero':'https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=400',
+        }
+        prods = [
+            ('Camisa Oxford Blanca','Clasica',25,45,50,'M','Blanco','Polo'),
+            ('Jeans Slim Fit','Modernos',30,60,40,'32','Azul',"Levi's"),
+            ('Vestido Floral Verano','Ligero',20,55,30,'M','Multicolor','Zara'),
+            ('Zapatillas Running','Deportivas',40,85,25,'42','Negro','Nike'),
+            ('Bolso de Cuero','Elegante',35,75,20,'Unico','Marron','Gucci'),
+        ]
+        for idx,p in enumerate(prods):
+            gp.crear_producto(nombre=p[0],descripcion=p[1],precio_costo=p[2],precio_venta=p[3],
+                              stock=p[4],talla=p[5],color=p[6],marca=p[7],
+                              categoria_id=cats[idx].id,imagen_url=IMGS.get(p[0],''))
+    
+    st.session_state.gestor_prod = gp
+    st.session_state.gestor_cat = gc
+    st.session_state.gestor_trans = GestorTransacciones()
+    st.session_state.db_ready = True
 
-# ==== DB ====
-init_db('tienda.db')
+# ==== CACHE DECORATOR para queries ====
+def cached_data(func):
+    """Cachea datos en session_state para no recargar en cada rerun"""
+    key = f"_cache_{func.__name__}"
+    if key not in st.session_state:
+        st.session_state[key] = func()
+    return lambda: st.session_state[key]
 
-# Imágenes por defecto (Unsplash)
-IMGS = {
-    "Camisa Oxford Blanca": "https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=400",
-    "Jeans Slim Fit": "https://images.unsplash.com/photo-1542272454315-4c01d7abdf4a?w=400",
-    "Vestido Floral Verano": "https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=400",
-    "Zapatillas Running": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400",
-    "Bolso de Cuero": "https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=400",
-}
+@cached_data
+def get_productos():
+    return st.session_state.gestor_prod.obtener_todos_productos()
 
-# Seed
-gc = GestorCategorias()
-for n,d in [("Camisas","Blusas y camisas"),("Pantalones","Jeans, chinos"),("Vestidos","Vestidos"),("Zapatos","Calzado"),("Accesorios","Bolsos, cinturones"),("Deportivo","Ropa deportiva"),("Abrigos","Chaquetas"),("Ropa Interior","Ropa interior")]:
-    try: gc.crear_categoria(n, d)
-    except: pass
+@cached_data
+def get_categorias():
+    return st.session_state.gestor_cat.obtener_todas_categorias()
 
-cats = gc.obtener_todas_categorias()
-gp = GestorProductos()
-if len(gp.obtener_todos_productos()) == 0 and cats:
-    data = [
-        ("Camisa Oxford Blanca","Clásica para oficina",25,45,50,"M","Blanco","Polo",cats[0].id),
-        ("Jeans Slim Fit","Modernos corte slim",30,60,40,"32","Azul","Levi's",cats[1].id),
-        ("Vestido Floral Verano","Ligero estampado floral",20,55,30,"M","Multicolor","Zara",cats[2].id),
-        ("Zapatillas Running","Deportivas running",40,85,25,"42","Negro","Nike",cats[3].id),
-        ("Bolso de Cuero","Elegante cuero genuino",35,75,20,"Único","Marrón","Gucci",cats[4].id),
-    ]
-    for d in data:
-        gp.crear_producto(nombre=d[0],descripcion=d[1],precio_costo=d[2],precio_venta=d[3],stock=d[4],talla=d[5],color=d[6],marca=d[7],categoria_id=d[8],imagen_url=IMGS.get(d[0],""))
+@cached_data
+def get_ventas():
+    return st.session_state.gestor_trans.obtener_ventas_totales()
 
-# ==== CSS ====
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
+@cached_data
+def get_bajo_stock():
+    return st.session_state.gestor_prod.obtener_productos_bajo_stock(10)
+
+def invalidate_cache():
+    for k in list(st.session_state.keys()):
+        if k.startswith('_cache_'):
+            del st.session_state[k]
+
+# ==== PAGE CONFIG (rápido) ====
+st.set_page_config(page_title="Fashion Store", page_icon="👗", layout="wide")
+
+# ==== CSS MINIFICADO + DARK MODE ====
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap');
 *{font-family:'Poppins',sans-serif;box-sizing:border-box}
+@keyframes fU{from{opacity:0;transform:translateY(15px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fL{from{opacity:0;transform:translateX(-15px)}to{opacity:1;transform:translateX(0)}}
+@keyframes sI{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes pG{0%,100%{box-shadow:0 0 8px rgba(102,126,234,.3)}50%{box-shadow:0 0 25px rgba(102,126,234,.6)}}
+@keyframes fl{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
 
-@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fadeL{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
-@keyframes pulseG{0%,100%{box-shadow:0 0 10px rgba(102,126,234,0.3)}50%{box-shadow:0 0 30px rgba(102,126,234,0.6)}}
-@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
-@keyframes scaleIn{from{transform:scale(0.9);opacity:0}to{transform:scale(1);opacity:1}}
+.login-bg{position:fixed;top:0;left:0;right:0;bottom:0;background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);z-index:-1}
+.login-bg::before{content:'';position:absolute;width:500px;height:500px;border-radius:50%;background:radial-gradient(circle,rgba(102,126,234,.15),transparent 70%);top:-150px;right:-150px;animation:fl 6s ease-in-out infinite}
+.login-bg::after{content:'';position:absolute;width:400px;height:400px;border-radius:50%;background:radial-gradient(circle,rgba(118,75,162,.12),transparent 70%);bottom:-100px;left:-100px;animation:fl 8s ease-in-out infinite reverse}
+.login-card{background:rgba(255,255,255,.06);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.12);border-radius:28px;padding:35px 30px;max-width:380px;margin:8vh auto;text-align:center;animation:sI .5s ease-out}
+.login-icon{font-size:3.5rem;animation:fl 3s ease infinite}
+.login-title{font-size:1.6rem;font-weight:800;background:linear-gradient(135deg,#667eea,#a855f7,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.login-sub{color:rgba(255,255,255,.5);font-size:.85rem;margin-bottom:20px}
+.login-card .stTextInput>div>div{background:rgba(255,255,255,.08)!important;border:1px solid rgba(255,255,255,.15)!important;border-radius:12px!important}
+.login-card .stTextInput input{color:#fff!important}
+.login-card .stTextInput label{color:rgba(255,255,255,.7)!important}
+.login-card .stButton>button{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:#fff!important;border:none!important;border-radius:12px!important;padding:10px!important;font-weight:700!important}
 
-/* Login - Streamlit friendly */
-.login-bg{
-    position:fixed;top:0;left:0;right:0;bottom:0;
-    background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);
-    z-index:-1;
-}
-.login-bg::before{
-    content:'';position:absolute;
-    width:600px;height:600px;border-radius:50%;
-    background:radial-gradient(circle,rgba(102,126,234,0.15),transparent 70%);
-    top:-200px;right:-200px;animation:float 6s ease-in-out infinite;
-}
-.login-bg::after{
-    content:'';position:absolute;
-    width:500px;height:500px;border-radius:50%;
-    background:radial-gradient(circle,rgba(118,75,162,0.12),transparent 70%);
-    bottom:-150px;left:-150px;animation:float 8s ease-in-out infinite reverse;
-}
-.login-card-login{
-    background:rgba(255,255,255,0.06);backdrop-filter:blur(20px);
-    -webkit-backdrop-filter:blur(20px);
-    border:1px solid rgba(255,255,255,0.12);border-radius:28px;
-    padding:40px 35px;max-width:400px;margin:10vh auto;
-    text-align:center;animation:scaleIn 0.5s ease-out;
-}
-.login-icon{font-size:4rem;animation:float 3s ease infinite}
-.login-title{font-size:1.8rem;font-weight:800;background:linear-gradient(135deg,#667eea,#a855f7,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.login-sub{color:rgba(255,255,255,0.5);font-size:.9rem;margin-bottom:25px}
-.login-card-login .stTextInput>div>div{background:rgba(255,255,255,0.08)!important;border:1px solid rgba(255,255,255,0.15)!important;border-radius:12px!important;color:white!important}
-.login-card-login .stTextInput input{color:white!important}
-.login-card-login .stTextInput label{color:rgba(255,255,255,0.7)!important}
-.login-card-login .stButton>button{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:white!important;border:none!important;border-radius:12px!important;padding:12px!important;font-weight:700!important;font-size:1rem!important;transition:all .3s!important}
-.login-card-login .stButton>button:hover{transform:translateY(-2px);box-shadow:0 10px 40px rgba(102,126,234,0.5)!important}
-
-.main>.stApp{animation:fadeUp .4s ease-out}
-.stButton>button{border-radius:12px!important;font-weight:600!important;transition:all .3s!important}
-.stButton>button:hover{transform:translateY(-2px)!important;box-shadow:0 8px 25px rgba(102,126,234,0.3)!important}
-section[data-testid="stSidebar"]{animation:fadeL .3s ease-out}
-section[data-testid="stSidebar"] .stRadio label{transition:all .2s;border-radius:10px;padding:8px 12px!important}
-section[data-testid="stSidebar"] .stRadio label:hover{background:rgba(102,126,234,0.1)!important;transform:translateX(4px)}
-[data-testid="metric-container"]{background:linear-gradient(135deg,#667eea,#764ba2)!important;border-radius:16px!important;padding:20px!important;color:white!important;text-align:center!important;box-shadow:0 8px 20px rgba(102,126,234,0.3)!important;animation:scaleIn .4s ease-out!important}
+.stButton>button{border-radius:10px!important;font-weight:600!important;transition:all .2s!important}
+.stButton>button:hover{transform:translateY(-2px)!important}
+section[data-testid="stSidebar"]{animation:fL .3s ease-out}
+[data-testid="metric-container"]{background:linear-gradient(135deg,#667eea,#764ba2)!important;border-radius:14px!important;padding:16px!important;color:#fff!important;text-align:center!important;animation:sI .3s ease-out!important}
 [data-testid="metric-container"] label{color:rgba(255,255,255,.9)!important}
-[data-testid="metric-container"] [data-testid="stMetricValue"]{color:white!important;font-weight:700!important}
+[data-testid="metric-container"] [data-testid="stMetricValue"]{color:#fff!important;font-weight:700!important}
 
-/* Product card with image - DARK MODE SUPPORT */
-.product-card{
-    background:var(--card-bg, white);border-radius:16px;overflow:hidden;
-    box-shadow:0 4px 15px rgba(0,0,0,0.08);transition:all .3s;
-    border:1px solid var(--border-color, #e5e7eb);animation:fadeUp .4s ease-out;
-    position:relative;
-}
-.product-card:hover{transform:translateY(-5px);box-shadow:0 12px 35px rgba(102,126,234,0.2)}
-.product-img{width:100%;height:180px;object-fit:cover;border-bottom:1px solid var(--border-color, #e5e7eb)}
-.product-body{padding:16px}
-.product-body h4{margin:0 0 5px;font-size:1rem;color:var(--text-color, #111827)}
-.product-body p{margin:2px 0;font-size:.88rem;color:var(--text-sec, #6b7280)}
-.product-body .price{font-size:1.1rem;font-weight:700;color:#059669}
+.product-card{background:var(--cb,#fff);border-radius:14px;overflow:hidden;box-shadow:0 3px 12px rgba(0,0,0,.08);transition:all .25s;border:1px solid var(--bd,#e5e7eb);animation:fU .3s ease-out}
+.product-card:hover{transform:translateY(-4px);box-shadow:0 10px 25px rgba(102,126,234,.2)}
+.product-img{width:100%;height:160px;object-fit:cover;border-bottom:1px solid var(--bd,#e5e7eb)}
+.product-body{padding:14px}
+.product-body h4{margin:0 0 3px;font-size:.95rem;color:var(--tc,#111827)}
+.product-body p{margin:2px 0;font-size:.85rem;color:var(--ts,#6b7280)}
+.price{font-size:1.05rem;font-weight:700;color:#059669}
+.stock-badge{font-size:.78rem;font-weight:400;color:var(--ts,#6b7280)}
+.meta-info{font-size:.8rem;color:var(--ts,#6b7280)}
 
-.cart-item{background:linear-gradient(135deg,var(--cart-bg1, #f8f9ff),var(--cart-bg2, #eef0ff));border-radius:14px;padding:12px 18px;margin:6px 0;border-left:5px solid #667eea;animation:fadeL .3s ease-out;color:var(--text-color, #111827)}
-.cart-item strong{color:var(--text-color, #111827)}
-.cart-total{background:linear-gradient(135deg,#667eea,#764ba2);border-radius:16px;padding:18px;color:white;animation:pulseG 3s ease-in-out infinite}
-.edit-form{background:linear-gradient(135deg,var(--edit-bg1, #f0f4ff),var(--edit-bg2, #faf5ff));border-radius:20px;padding:25px;border:2px solid rgba(102,126,234,0.2);animation:scaleIn .3s ease-out;margin:15px 0;color:var(--text-color, #111827)}
-.stAlert,.stInfo,.stSuccess,.stWarning,.stError{border-radius:12px!important;animation:fadeUp .3s ease-out}
-.stExpander{border-radius:12px!important;border:1px solid var(--border-color, #e5e7eb)!important;margin:8px 0!important}
-.stPlotlyChart{animation:fadeUp .6s ease-out}
-[data-testid="column"]{animation:fadeUp .4s ease-out}
-.footer{text-align:center;color:var(--text-sec, #6b7280);padding:20px 0}
+.cart-item{background:linear-gradient(135deg,var(--c1,#f8f9ff),var(--c2,#eef0ff));border-radius:12px;padding:10px 16px;margin:5px 0;border-left:4px solid #667eea;animation:fL .3s ease-out;color:var(--tc,#111827)}
+.cart-total{background:linear-gradient(135deg,#667eea,#764ba2);border-radius:14px;padding:16px;color:#fff;animation:pG 3s ease-in-out infinite}
+.edit-form{background:linear-gradient(135deg,var(--e1,#f0f4ff),var(--e2,#faf5ff));border-radius:16px;padding:20px;border:2px solid rgba(102,126,234,.2);animation:sI .25s ease-out;margin:12px 0;color:var(--tc,#111827)}
+.stAlert,.stSuccess,.stWarning,.stError{border-radius:10px!important;animation:fU .25s ease-out!important}
+.stExpander{border-radius:10px!important}
+.stPlotlyChart{animation:fU .4s ease-out}
+.footer{text-align:center;color:var(--ts,#6b7280);padding:15px 0}
 
-/* DARK MODE OVERRIDES */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --card-bg: #1e1e2e;
-        --border-color: #313244;
-        --text-color: #cdd6f4;
-        --text-sec: #a6adc8;
-        --cart-bg1: #1e1e2e;
-        --cart-bg2: #181825;
-        --edit-bg1: #1e1e2e;
-        --edit-bg2: #181825;
-    }
-    .product-body .price{color:#a6e3a1}
-    .product-card:hover{box-shadow:0 12px 35px rgba(102,126,234,0.15)}
-    .product-card .product-img{border-bottom-color:#313244}
-}
-.stock-badge{font-size:.8rem;font-weight:400;color:var(--text-sec, #6b7280)}
-.meta-info{font-size:.82rem;color:var(--text-sec, #6b7280)}
-</style>
-""", unsafe_allow_html=True)
+@media(prefers-color-scheme:dark){
+    :root{--cb:#1e1e2e;--bd:#313244;--tc:#cdd6f4;--ts:#a6adc8;--c1:#1e1e2e;--c2:#181825;--e1:#1e1e2e;--e2:#181825}
+    .price{color:#a6e3a1}
+}</style>""", unsafe_allow_html=True)
 
 # ==== LOGIN ====
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
@@ -151,90 +140,73 @@ if 'cart' not in st.session_state: st.session_state.cart = []
 
 if not st.session_state.logged_in:
     st.markdown('<div class="login-bg"></div>', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 2, 1])
+    _,c2,_ = st.columns([1,2,1])
     with c2:
-        st.markdown('<div class="login-card-login">', unsafe_allow_html=True)
-        st.markdown('<div class="login-icon">👗</div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-title">Fashion Store</div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-sub">Sistema de Gestión de Tienda de Ropa</div>', unsafe_allow_html=True)
-        
-        with st.form("login_form", clear_on_submit=False):
-            usuario = st.text_input("👤 Usuario", value="admin", placeholder="admin")
-            contrasena = st.text_input("🔒 Contraseña", type="password", value="admin", placeholder="•"*8)
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        st.markdown('<div class="login-icon">👗</div><div class="login-title">Fashion Store</div><div class="login-sub">Gestión de Tienda de Ropa</div>', unsafe_allow_html=True)
+        with st.form("lf"):
+            st.text_input("👤 Usuario", value="admin", key="lu")
+            st.text_input("🔒 Contraseña", type="password", value="admin", key="lp")
             if st.form_submit_button("🚀 Iniciar Sesión", width='stretch', type="primary"):
-                if usuario == "admin" and contrasena == "admin":
-                    st.session_state.logged_in = True
-                    st.rerun()
-                else:
-                    st.error("❌ Usuario o contraseña incorrectos")
-        
-        st.markdown('<p style="color:rgba(255,255,255,0.35);font-size:.8rem;margin-top:20px">Credenciales: <b style="color:rgba(255,255,255,0.6)">admin</b> / <b style="color:rgba(255,255,255,0.6)">admin</b></p>', unsafe_allow_html=True)
+                if st.session_state.lu == "admin" and st.session_state.lp == "admin":
+                    st.session_state.logged_in = True; st.rerun()
+                else: st.error("❌ Incorrecto")
+        st.markdown('<p style="color:rgba(255,255,255,.35);font-size:.78rem;margin-top:15px">admin / admin</p>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
 # ==== APP ====
-if 'gestor_prod' not in st.session_state:
-    st.session_state.gestor_prod = GestorProductos()
-    st.session_state.gestor_cat = GestorCategorias()
-    st.session_state.gestor_trans = GestorTransacciones()
-
 st.title("👗 Fashion Store Manager")
-st.markdown("### *Sistema Integral de Gestión de Tienda de Ropa*")
+st.markdown("### *Sistema de Gestión de Tienda de Ropa*")
 st.markdown("---")
 
+# Sidebar
 st.sidebar.title("🧭 Navegación")
 st.sidebar.markdown("---")
-opcion = st.sidebar.radio("Selecciona:", ["📊 Dashboard","📦 Catálogo","➕ Nuevo Producto","🏷️ Categorías","💰 Registrar Venta","📈 Reportes","⚙️ Configuración"])
+opcion = st.sidebar.radio("Selecciona:", ["📊 Dashboard","📦 Catálogo","➕ Nuevo","🏷️ Cats","💰 Venta","📈 Reportes","⚙️ Config"], key="nav")
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📱 Info Rápida")
+st.sidebar.markdown("### 📱 Info")
 
-prods = st.session_state.gestor_prod.obtener_todos_productos()
-cats = st.session_state.gestor_cat.obtener_todas_categorias()
-vi = st.session_state.gestor_trans.obtener_ventas_totales()
+# Datos cacheados
+prods = get_productos()
+cats = get_categorias()
+vi = get_ventas()
+
 st.sidebar.metric("Productos", len(prods))
 st.sidebar.metric("Categorías", len(cats))
 st.sidebar.metric("Ventas", f"${vi.total:.2f}" if vi.total else "$0.00")
 if st.sidebar.button("🚪 Salir", width='stretch'):
     st.session_state.logged_in = False; st.session_state.cart = []; st.rerun()
 
-bajo = st.session_state.gestor_prod.obtener_productos_bajo_stock(10)
-if bajo: st.sidebar.warning(f"⚠️ {len(bajo)} con stock bajo")
+bajo = get_bajo_stock()
+if bajo: st.sidebar.warning(f"⚠️ {len(bajo)} bajo stock")
 
 def mostrar_producto(p):
-    """Renderiza una tarjeta de producto con imagen"""
     img = p.imagen_url or ""
     st.markdown(f"""
     <div class="product-card">
-        {"<img src='"+img+"' class='product-img'>" if img else '<div class="product-img" style="background:linear-gradient(135deg,var(--card-bg,#667eea22),var(--card-bg2,#764ba222));display:flex;align-items:center;justify-content:center;font-size:3rem;border-bottom:1px solid var(--border-color,#e5e7eb)">👕</div>'}
+        {"<img src='"+img+"' class='product-img'>" if img else '<div class="product-img" style="background:linear-gradient(135deg,var(--cb,#667eea22),var(--cb2,#764ba222));display:flex;align-items:center;justify-content:center;font-size:2.5rem;border-bottom:1px solid var(--bd,#e5e7eb)">👕</div>'}
         <div class="product-body">
             <h4>{p.nombre}</h4>
-            <p>{p.descripcion[:60]}...</p>
+            <p>{p.descripcion[:50]}...</p>
             <p class="price">${p.precio_venta:.2f} <span class="stock-badge">Stock: {p.stock}</span></p>
-            <p class="meta-info">{p.categoria.nombre if p.categoria else ''} · {p.marca or ''} · {p.talla or ''} · {p.color or ''}</p>
+            <p class="meta-info">{p.categoria.nombre if p.categoria else ''} · {p.marca or ''} · {p.talla or ''}</p>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
 
-def img_to_base64(img_file):
-    """Convierte imagen subida a base64"""
-    if img_file:
-        data = img_file.getvalue()
-        b64 = base64.b64encode(data).decode()
-        ext = img_file.name.split('.')[-1]
-        return f"data:image/{ext};base64,{b64}"
+def img_to_base64(f):
+    if f: d=f.getvalue(); return f"data:image/{f.name.split('.')[-1]};base64,{base64.b64encode(d).decode()}"
     return ""
 
 # ============================================================
 # DASHBOARD
 # ============================================================
 if opcion == "📊 Dashboard":
-    st.header("📊 Dashboard General")
+    st.header("📊 Dashboard")
     c1,c2,c3,c4 = st.columns(4)
     with c1: st.metric("Productos", len(prods))
     with c2: st.metric("Valor Inv.", f"${sum(p.precio_costo*p.stock for p in prods):,.2f}")
-    with c3:
-        tv = st.session_state.gestor_trans.obtener_ventas_totales()
-        st.metric("Ventas", f"${tv.total:.2f}" if tv.total else "$0.00")
+    with c3: st.metric("Ventas", f"${vi.total:.2f}" if vi.total else "$0.00")
     with c4: st.metric("Stock Total", sum(p.stock for p in prods))
     
     st.markdown("---"); c1,c2 = st.columns(2)
@@ -245,200 +217,178 @@ if opcion == "📊 Dashboard":
             for p in prods:
                 cn=p.categoria.nombre if p.categoria else "Sin cat"
                 cc[cn]=cc.get(cn,0)+1
-            fig=px.pie(values=list(cc.values()),names=list(cc.keys()),hole=0.4,color_discrete_sequence=px.colors.qualitative.Set3)
-            fig.update_layout(height=400); st.plotly_chart(fig, width='stretch')
+            fig=px.pie(values=list(cc.values()),names=list(cc.keys()),hole=.4,color_discrete_sequence=px.colors.qualitative.Set3)
+            fig.update_layout(height=350,margin=dict(l=20,r=20,t=30,b=20))
+            st.plotly_chart(fig, width='stretch')
     with c2:
         st.subheader("💵 Margen")
         if prods:
-            df=pd.DataFrame([{'Producto':p.nombre[:20],'Margen %':p.margen_ganancia} for p in prods[:10]])
+            df=pd.DataFrame([{'Producto':p.nombre[:18],'Margen %':p.margen_ganancia} for p in prods[:8]])
             fig=px.bar(df,x='Margen %',y='Producto',orientation='h',color='Margen %',color_continuous_scale='RdYlGn')
-            fig.update_layout(height=400); st.plotly_chart(fig, width='stretch')
+            fig.update_layout(height=350,margin=dict(l=20,r=20,t=30,b=20))
+            st.plotly_chart(fig, width='stretch')
     if bajo:
         st.markdown("---"); st.subheader("⚠️ Stock Bajo")
-        st.dataframe(pd.DataFrame([{'ID':p.id,'Producto':p.nombre,'Stock':p.stock,'Precio':f"${p.precio_venta:.2f}"} for p in bajo]), width='stretch', hide_index=True)
+        st.dataframe(pd.DataFrame([{'ID':p.id,'Producto':p.nombre,'Stock':p.stock} for p in bajo]), width='stretch', hide_index=True)
 
 # ============================================================
 # CATÁLOGO
 # ============================================================
 elif opcion == "📦 Catálogo":
-    st.header("📦 Catálogo de Productos")
+    st.header("📦 Catálogo")
     
-    # Editar
     if 'edit_id' in st.session_state and st.session_state.edit_id:
         pe = st.session_state.gestor_prod.obtener_producto(st.session_state.edit_id)
         if pe:
-            st.markdown("---")
-            st.subheader(f"✏️ {pe.nombre}")
-            with st.form("edit_form"):
+            st.markdown("---"); st.subheader(f"✏️ {pe.nombre}")
+            with st.form("ef"):
                 c1,c2 = st.columns(2)
                 with c1:
-                    en = st.text_input("Nombre", value=pe.nombre)
-                    ed = st.text_area("Descripción", value=pe.descripcion or "", height=80)
-                    ec = st.number_input("Costo ($)", value=pe.precio_costo, step=.01, format="%.2f")
-                    ev = st.number_input("Venta ($)", value=pe.precio_venta, step=.01, format="%.2f")
+                    en=st.text_input("Nombre",value=pe.nombre)
+                    ed=st.text_area("Descripción",value=pe.descripcion or "",height=70)
+                    ec=st.number_input("Costo ($)",value=pe.precio_costo,step=.01,format="%.2f")
+                    ev=st.number_input("Venta ($)",value=pe.precio_venta,step=.01,format="%.2f")
                 with c2:
-                    esk = st.number_input("Stock", value=pe.stock, step=1)
+                    esk=st.number_input("Stock",value=pe.stock,step=1)
                     if cats:
-                        cops = {c.nombre:c.id for c in cats}
-                        ca = pe.categoria.nombre if pe.categoria else list(cops.keys())[0]
-                        ecat = st.selectbox("Categoría", list(cops.keys()), index=list(cops.keys()).index(ca) if ca in cops else 0)
-                    eta = st.text_input("Talla", value=pe.talla or "")
-                    eco = st.text_input("Color", value=pe.color or "")
-                    ema = st.text_input("Marca", value=pe.marca or "")
-                    eimg = st.text_input("URL Imagen", value=pe.imagen_url or "", placeholder="https://...")
-                
-                st.markdown("##### 📸 Subir imagen")
-                upload = st.file_uploader("O elige un archivo", type=["jpg","jpeg","png","webp"], key="edit_img_upload")
-                
-                cb1,cb2,cb3 = st.columns([1,2,1])
-                with cb2:
-                    if st.form_submit_button("💾 Guardar", width='stretch', type="primary"):
-                        kwargs = {'nombre':en,'descripcion':ed,'precio_costo':ec,'precio_venta':ev,'stock':esk,'talla':eta,'color':eco,'marca':ema}
-                        if cats: kwargs['categoria_id'] = cops[ecat]
-                        # Priorizar imagen subida sobre URL
-                        if upload: kwargs['imagen_url'] = img_to_base64(upload)
-                        elif eimg: kwargs['imagen_url'] = eimg
-                        st.session_state.gestor_prod.actualizar_producto(pe.id, **kwargs)
-                        st.success(f"✅ '{en}' actualizado!"); st.session_state.edit_id = None; st.rerun()
-                if st.form_submit_button("❌ Cancelar", width='stretch'): st.session_state.edit_id = None; st.rerun()
+                        cops={c.nombre:c.id for c in cats}
+                        ca=pe.categoria.nombre if pe.categoria else list(cops.keys())[0]
+                        ecat=st.selectbox("Categoría",list(cops.keys()),index=list(cops.keys()).index(ca) if ca in cops else 0)
+                    eta=st.text_input("Talla",value=pe.talla or "")
+                    eco=st.text_input("Color",value=pe.color or "")
+                    ema=st.text_input("Marca",value=pe.marca or "")
+                    eimg=st.text_input("URL Imagen",value=pe.imagen_url or "",placeholder="https://...")
+                upload=st.file_uploader("📸 Subir",type=["jpg","jpeg","png","webp"],key="eiu")
+                if st.form_submit_button("💾 Guardar",width='stretch',type="primary"):
+                    kw={'nombre':en,'descripcion':ed,'precio_costo':ec,'precio_venta':ev,'stock':esk,'talla':eta,'color':eco,'marca':ema}
+                    if cats: kw['categoria_id']=cops[ecat]
+                    kw['imagen_url']=img_to_base64(upload) if upload else eimg
+                    st.session_state.gestor_prod.actualizar_producto(pe.id,**kw)
+                    invalidate_cache(); st.success(f"✅ '{en}' actualizado!"); st.session_state.edit_id=None; st.rerun()
+                if st.form_submit_button("❌ Cancelar",width='stretch'): st.session_state.edit_id=None; st.rerun()
     
-    # Filtros
     c1,c2,c3 = st.columns(3)
-    with c1: busq = st.text_input("🔍 Buscar:", "")
+    with c1: busq=st.text_input("🔍","",key="bq")
     with c2:
-        cops = {c.nombre:c.id for c in cats}
-        cf = st.selectbox("Categoría:", ["Todas"] + list(cops.keys()))
-    with c3: ord = st.selectbox("Orden:", ["Nombre","Precio ↑","Precio ↓","Stock"])
+        cops={c.nombre:c.id for c in cats}
+        cf=st.selectbox("Cat:",["Todas"]+list(cops.keys()),key="cf")
+    with c3: ord=st.selectbox("Ord:",["Nombre","Precio ↑","Precio ↓","Stock"],key="or")
     
-    cid = cops.get(cf) if cf != "Todas" else None
-    lista = st.session_state.gestor_prod.buscar_productos(termino=busq, categoria_id=cid)
-    if ord == "Nombre": lista.sort(key=lambda x: x.nombre)
-    elif ord == "Precio ↑": lista.sort(key=lambda x: x.precio_venta)
-    elif ord == "Precio ↓": lista.sort(key=lambda x: x.precio_venta, reverse=True)
-    elif ord == "Stock": lista.sort(key=lambda x: x.stock)
+    cid = cops.get(cf) if cf!="Todas" else None
+    lista=st.session_state.gestor_prod.buscar_productos(termino=busq,categoria_id=cid)
+    if ord=="Nombre": lista.sort(key=lambda x:x.nombre)
+    elif ord=="Precio ↑": lista.sort(key=lambda x:x.precio_venta)
+    elif ord=="Precio ↓": lista.sort(key=lambda x:x.precio_venta,reverse=True)
+    elif ord=="Stock": lista.sort(key=lambda x:x.stock)
     
-    st.markdown(f"**{len(lista)} producto(s)**"); st.markdown("---")
+    st.markdown(f"**{len(lista)} prod.**"); st.markdown("---")
     if lista:
-        cols = st.columns(3)
-        for i, p in enumerate(lista):
-            with cols[i % 3]:
+        cols=st.columns(3)
+        for i,p in enumerate(lista):
+            with cols[i%3]:
                 mostrar_producto(p)
-                cb1,cb2 = st.columns(2)
+                cb1,cb2=st.columns(2)
                 with cb1:
-                    if st.button("✏️", key=f"e_{p.id}", width='stretch'): st.session_state.edit_id = p.id; st.rerun()
+                    if st.button("✏️",key=f"e{p.id}",width='stretch'): st.session_state.edit_id=p.id; st.rerun()
                 with cb2:
-                    if st.button("🗑️", key=f"d_{p.id}", width='stretch'):
-                        if st.session_state.gestor_prod.eliminar_producto(p.id): st.success(f"'{p.nombre}' eliminado"); st.rerun()
+                    if st.button("🗑️",key=f"d{p.id}",width='stretch'):
+                        if st.session_state.gestor_prod.eliminar_producto(p.id): invalidate_cache(); st.success("Eliminado"); st.rerun()
         st.markdown("---")
-        df_e = pd.DataFrame([{'ID':pp.id,'Nombre':pp.nombre,'Venta':pp.precio_venta,'Stock':pp.stock,'Cat':pp.categoria.nombre if pp.categoria else '','Marca':pp.marca,'Ganancia':pp.ganancia,'Margen %':round(pp.margen_ganancia,2)} for pp in lista])
-        st.download_button("📥 CSV", df_e.to_csv(index=False, encoding='utf-8-sig'), f"catalogo_{datetime.now():%Y%m%d_%H%M%S}.csv", mime="text/csv")
+        df_e=pd.DataFrame([{'ID':pp.id,'Nombre':pp.nombre,'Venta':pp.precio_venta,'Stock':pp.stock,'Cat':pp.categoria.nombre if pp.categoria else ''} for pp in lista])
+        st.download_button("📥 CSV", df_e.to_csv(index=False,encoding='utf-8-sig'), f"catalogo_{datetime.now():%Y%m%d_%H%M%S}.csv", mime="text/csv")
     else: st.info("Sin resultados")
 
 # ============================================================
 # NUEVO PRODUCTO
 # ============================================================
-elif opcion == "➕ Nuevo Producto":
+elif opcion == "➕ Nuevo":
     st.header("➕ Nuevo Producto")
-    with st.form("np_form"):
-        c1,c2 = st.columns(2)
-        with c1:
-            nom = st.text_input("Nombre *"); desc = st.text_area("Descripción", height=80)
-            costo = st.number_input("Costo ($)", min_value=0., step=.01)
-            vta = st.number_input("Venta ($)", min_value=0., step=.01)
+    with st.form("np"):
+        c1,c2=st.columns(2)
+        with c1: nom=st.text_input("Nombre *"); desc=st.text_area("Descripción",height=70); costo=st.number_input("Costo ($)",min_value=0.,step=.01); vta=st.number_input("Venta ($)",min_value=0.,step=.01)
         with c2:
-            sk = st.number_input("Stock", min_value=0, step=1)
-            if cats:
-                cops = {c.nombre:c.id for c in cats}
-                csel = st.selectbox("Categoría *", list(cops.keys()))
-            ta = st.text_input("Talla"); co = st.text_input("Color"); ma = st.text_input("Marca")
-        img_url = st.text_input("URL de imagen (opcional)", placeholder="https://...")
-        img_file = st.file_uploader("O sube una imagen", type=["jpg","jpeg","png","webp"])
-        
-        if st.form_submit_button("💾 Guardar", width='stretch', type="primary"):
-            if not nom or not csel: st.error("Nombre y categoría requeridos")
+            sk=st.number_input("Stock",min_value=0,step=1)
+            if cats: cops={c.nombre:c.id for c in cats}; csel=st.selectbox("Categoría *",list(cops.keys()))
+            ta=st.text_input("Talla"); co=st.text_input("Color"); ma=st.text_input("Marca")
+        img_url=st.text_input("URL imagen",placeholder="https://...")
+        img_f=st.file_uploader("O sube",type=["jpg","jpeg","png","webp"])
+        if st.form_submit_button("💾 Guardar",width='stretch',type="primary"):
+            if not nom: st.error("Nombre requerido")
             else:
-                url_final = img_to_base64(img_file) if img_file else img_url
                 try:
-                    np = st.session_state.gestor_prod.crear_producto(nom, desc, costo, vta, sk, cops[csel], ta, co, ma, url_final)
-                    st.success(f"✅ '{nom}' creado!"); st.balloons()
-                    st.write(f"**Precio:** ${np.precio_venta:.2f} · **Margen:** {np.margen_ganancia:.1f}% · **Stock:** {np.stock}")
+                    url=img_to_base64(img_f) if img_f else img_url
+                    st.session_state.gestor_prod.crear_producto(nom,desc,costo,vta,sk,cops[csel],ta,co,ma,url)
+                    invalidate_cache(); st.success(f"✅ '{nom}' creado!"); st.balloons()
                 except Exception as e: st.error(f"Error: {e}")
 
 # ============================================================
 # CATEGORÍAS
 # ============================================================
-elif opcion == "🏷️ Categorías":
+elif opcion == "🏷️ Cats":
     st.header("🏷️ Categorías")
-    c1,c2 = st.columns([1,2])
+    c1,c2=st.columns([1,2])
     with c1:
         st.subheader("➕ Nueva")
         with st.form("nc"):
-            nc = st.text_input("Nombre *"); nd = st.text_area("Descripción")
-            if st.form_submit_button("Crear", width='stretch'):
+            nc=st.text_input("Nombre *"); nd=st.text_area("Descripción")
+            if st.form_submit_button("Crear",width='stretch'):
                 if nc:
-                    try: st.session_state.gestor_cat.crear_categoria(nc, nd); st.success(f"✅ '{nc}' creada!"); st.rerun()
+                    try: st.session_state.gestor_cat.crear_categoria(nc,nd); invalidate_cache(); st.success(f"✅ '{nc}'"); st.rerun()
                     except Exception as e: st.error(f"Error: {e}")
     with c2:
         st.subheader("📋 Existentes")
         for cat in st.session_state.gestor_cat.obtener_todas_categorias():
-            with st.expander(f"📁 {cat.nombre} ({len(cat.productos)} prods)"):
-                st.write(f"**ID:** {cat.id} | **Desc:** {cat.descripcion or 'N/A'}")
+            with st.expander(f"📁 {cat.nombre} ({len(cat.productos)})"):
+                st.write(f"**ID:** {cat.id} | {cat.descripcion or ''}")
                 if cat.productos:
-                    for pr in cat.productos[:10]: st.write(f"  • {pr.nombre} - ${pr.precio_venta:.2f}")
-                if st.button("🗑️ Eliminar", key=f"dc_{cat.id}"):
-                    if len(cat.productos)==0 and st.session_state.gestor_cat.eliminar_categoria(cat.id): st.success("Eliminada"); st.rerun()
+                    for pr in cat.productos[:8]: st.write(f"  • {pr.nombre} - ${pr.precio_venta:.2f}")
+                if st.button("🗑️",key=f"dc{cat.id}"):
+                    if len(cat.productos)==0 and st.session_state.gestor_cat.eliminar_categoria(cat.id): invalidate_cache(); st.success("Eliminada"); st.rerun()
                     else: st.error("Tiene productos")
 
 # ============================================================
-# VENTAS CARRITO
+# VENTAS
 # ============================================================
-elif opcion == "💰 Registrar Venta":
+elif opcion == "💰 Venta":
     st.header("💰 Registrar Venta")
-    if 'cart' not in st.session_state: st.session_state.cart = []
-    disponibles = [p for p in st.session_state.gestor_prod.obtener_todos_productos() if p.stock > 0]
+    if 'cart' not in st.session_state: st.session_state.cart=[]
+    disp=[p for p in get_productos() if p.stock>0]
     
     st.subheader("🛒 Carrito")
     if st.session_state.cart:
         total=0
-        for i,item in enumerate(st.session_state.cart):
-            sub=item['cant']*item['precio']; total+=sub
-            st.markdown(f'<div class="cart-item"><strong>{item["nombre"]}</strong> x{item["cant"]} = <strong>${sub:.2f}</strong></div>', unsafe_allow_html=True)
-            if st.button("❌", key=f"rc_{i}"): st.session_state.cart.pop(i); st.rerun()
-        st.markdown(f'<div class="cart-total"><h3 style="margin:0">💰 Total: ${total:.2f}</h3></div>', unsafe_allow_html=True)
+        for i,it in enumerate(st.session_state.cart):
+            sub=it['cant']*it['precio']; total+=sub
+            st.markdown(f'<div class="cart-item"><strong>{it["nombre"]}</strong> x{it["cant"]} = <strong>${sub:.2f}</strong></div>',unsafe_allow_html=True)
+            if st.button("❌",key=f"rc{i}"): st.session_state.cart.pop(i); st.rerun()
+        st.markdown(f'<div class="cart-total"><h3 style="margin:0">💰 Total: ${total:.2f}</h3></div>',unsafe_allow_html=True)
         st.markdown("---")
-        c1,c2 = st.columns(2)
-        with c1: cli = st.text_input("Cliente (opc.)")
-        with c2: met = st.selectbox("Pago", ["Efectivo","Tarjeta","Transferencia","Otro"])
-        nt = st.text_area("Notas")
-        if st.button("✅ Finalizar Venta", width='stretch', type="primary"):
+        c1,c2=st.columns(2)
+        with c1: cli=st.text_input("Cliente")
+        with c2: met=st.selectbox("Pago",["Efectivo","Tarjeta","Transferencia","Otro"])
+        nt=st.text_area("Notas")
+        if st.button("✅ Finalizar",width='stretch',type="primary"):
             ok=0
             for it in st.session_state.cart:
-                if st.session_state.gestor_trans.registrar_venta(it['id'], it['cant'], cli or None, f"Método:{met}. {nt}"): ok+=1
-            if ok: st.success(f"✅ {ok} venta(s). Total: ${total:.2f}"); st.balloons(); st.session_state.cart = []; st.rerun()
+                if st.session_state.gestor_trans.registrar_venta(it['id'],it['cant'],cli or None,f"Método:{met}. {nt}"): ok+=1
+            if ok: invalidate_cache(); st.success(f"✅ {ok} venta(s). Total: ${total:.2f}"); st.balloons(); st.session_state.cart=[]; st.rerun()
             else: st.error("Error en ventas")
-        if st.button("🗑️ Vaciar", width='stretch'): st.session_state.cart = []; st.rerun()
-    else: st.info("🛒 Carrito vacío. Agrega productos abajo.")
+        if st.button("🗑️ Vaciar",width='stretch'): st.session_state.cart=[]; st.rerun()
+    else: st.info("🛒 Vacío")
     
     st.markdown("---"); st.subheader("📦 Agregar")
-    if disponibles:
-        c1,c2,c3 = st.columns([3,2,2])
-        with c1:
-            opts = {f"{p.nombre} - ${p.precio_venta:.2f} (Stock:{p.stock})": p for p in disponibles}
-            sel = st.selectbox("Producto:", list(opts.keys()), key="ca")
-        with c2:
-            obj = opts[sel]
-            qty = st.number_input("Cant:", min_value=1, max_value=obj.stock, value=1, step=1, key="cq")
-        with c3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🛒 Agregar", width='stretch'):
-                st.session_state.cart.append({'id':obj.id,'nombre':obj.nombre,'precio':obj.precio_venta,'cant':qty})
-                st.success(f"✅ {obj.nombre} x{qty}"); st.rerun()
+    if disp:
+        c1,c2,c3=st.columns([3,2,2])
+        with c1: opts={f"{p.nombre} - ${p.precio_venta:.2f} (S:{p.stock})":p for p in disp}; sel=st.selectbox("",list(opts.keys()),key="ca")
+        with c2: obj=opts[sel]; qty=st.number_input("Cant:",min_value=1,max_value=obj.stock,value=1,step=1,key="cq")
+        with c3: st.markdown("<br>",unsafe_allow_html=True)
+        if st.button("🛒 Agregar",width='stretch'): st.session_state.cart.append({'id':obj.id,'nombre':obj.nombre,'precio':obj.precio_venta,'cant':qty}); st.success(f"✅ {obj.nombre}"); st.rerun()
     else: st.warning("⚠️ Sin stock")
     
     st.markdown("---"); st.subheader("🕐 Últimas")
-    vs = [v for v in st.session_state.gestor_trans.obtener_todas_transacciones(5) if v.tipo=='venta']
+    vs=[v for v in st.session_state.gestor_trans.obtener_todas_transacciones(5) if v.tipo=='venta']
     if vs:
-        for v in vs: st.write(f"• {v.producto.nombre if v.producto else 'N/A'} - {abs(v.cantidad)} un. - ${abs(v.total):.2f} ({v.fecha:%d/%m %H:%M})")
+        for v in vs: st.write(f"• {v.producto.nombre if v.producto else 'N/A'} - {abs(v.cantidad)} un. - ${abs(v.total):.2f}")
     else: st.info("Sin ventas")
 
 # ============================================================
@@ -447,49 +397,51 @@ elif opcion == "💰 Registrar Venta":
 elif opcion == "📈 Reportes":
     st.header("📈 Reportes")
     st.subheader("📊 KPIs")
-    tp = st.session_state.gestor_prod.obtener_todos_productos()
-    c1,c2,c3,c4 = st.columns(4)
+    tp=get_productos()
+    c1,c2,c3,c4=st.columns(4)
     with c1: st.metric("Valor Inv.", f"${sum(p.precio_costo*p.stock for p in tp):,.2f}")
-    with c2: st.metric("Potencial Venta", f"${sum(p.precio_venta*p.stock for p in tp):,.2f}")
+    with c2: st.metric("Potencial", f"${sum(p.precio_venta*p.stock for p in tp):,.2f}")
     with c3: st.metric("Ganancia Pot.", f"${sum(p.ganancia*p.stock for p in tp):,.2f}")
     with c4: st.metric("Margen Prom.", f"{sum(p.margen_ganancia for p in tp)/len(tp):.1f}%" if tp else "0%")
-    st.markdown("---"); c1,c2 = st.columns(2)
+    
+    st.markdown("---"); c1,c2=st.columns(2)
     with c1:
-        st.subheader("🏆 Top Rentables")
+        st.subheader("🏆 Top")
         if tp:
-            df=pd.DataFrame([{'Producto':p.nombre[:20],'Ganancia':p.ganancia} for p in tp]).sort_values('Ganancia', ascending=False).head(10)
+            df=pd.DataFrame([{'Producto':p.nombre[:18],'Ganancia':p.ganancia} for p in tp]).sort_values('Ganancia',ascending=False).head(8)
             fig=px.bar(df,x='Ganancia',y='Producto',orientation='h',color='Ganancia',color_continuous_scale='Viridis')
-            fig.update_layout(height=450); st.plotly_chart(fig, width='stretch')
+            fig.update_layout(height=400,margin=dict(l=20,r=20,t=30,b=20))
+            st.plotly_chart(fig, width='stretch')
     with c2:
         st.subheader("📦 Stock")
         if tp and cats:
-            df=pd.DataFrame([{'Cat':p.categoria.nombre if p.categoria else 'Sin cat','Stock':p.stock} for p in tp]).groupby('Cat')['Stock'].sum().reset_index()
+            df=pd.DataFrame([{'Cat':p.categoria.nombre if p.categoria else 'Sin','Stock':p.stock} for p in tp]).groupby('Cat')['Stock'].sum().reset_index()
             fig=px.pie(df,values='Stock',names='Cat',hole=.3,color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig, width='stretch')
     st.markdown("---")
-    if st.button("📊 Exportar Excel"):
-        df=pd.DataFrame([{'ID':p.id,'Producto':p.nombre,'Cat':p.categoria.nombre if p.categoria else '','Marca':p.marca,'Costo':p.precio_costo,'Venta':p.precio_venta,'Ganancia':p.ganancia,'Margen%':round(p.margen_ganancia,2),'Stock':p.stock,'Valor Inv':p.precio_costo*p.stock} for p in tp])
+    if st.button("📊 Excel"):
+        df=pd.DataFrame([{'ID':p.id,'Nombre':p.nombre,'Cat':p.categoria.nombre if p.categoria else '','Venta':p.precio_venta,'Ganancia':p.ganancia,'Margen%':round(p.margen_ganancia,2),'Stock':p.stock} for p in tp])
         out=BytesIO()
-        with pd.ExcelWriter(out, engine='xlsxwriter') as w: df.to_excel(w, sheet_name='Reporte', index=False)
-        st.download_button("📥 Descargar", out.getvalue(), f"reporte_{datetime.now():%Y%m%d_%H%M%S}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        with pd.ExcelWriter(out,engine='xlsxwriter') as w: df.to_excel(w,sheet_name='Reporte',index=False)
+        st.download_button("📥 Descargar",out.getvalue(),f"reporte_{datetime.now():%Y%m%d_%H%M%S}.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ============================================================
 # CONFIG
 # ============================================================
-elif opcion == "⚙️ Configuración":
+elif opcion == "⚙️ Config":
     st.header("⚙️ Configuración")
-    c1,c2 = st.columns(2)
+    c1,c2=st.columns(2)
     with c1:
         st.markdown("### 💾 Datos")
-        if st.button("🗑️ Limpiar DB", width='stretch'):
-            if os.path.exists('tienda.db'): os.remove('tienda.db'); st.success("✅ DB limpiada"); st.balloons()
+        if st.button("🗑️ Limpiar DB",width='stretch'):
+            if os.path.exists('tienda.db'): os.remove('tienda.db'); invalidate_cache(); st.success("✅ DB limpia"); st.balloons()
     with c2:
         st.markdown("### 📊 Info")
         st.write(f"**Fecha:** {datetime.now():%Y-%m-%d %H:%M}")
         st.write(f"**Productos:** {len(prods)} · **Cat:** {len(cats)}")
-        if vi.total: st.write(f"**Ventas:** ${vi.total:.2f} · **Trans:** {vi.cantidad}")
+        if vi.total: st.write(f"**Ventas:** ${vi.total:.2f}")
     st.markdown("---")
-    st.markdown("**Fashion Store Manager v2.2** · Login · Edición con foto · Carrito · Animaciones · Exportación")
+    st.markdown("**v3.0** · Caché · Streamlit · Docker · Dark mode · Multi-carrito")
 
 st.markdown("---")
-st.markdown('<div class="footer">Fashion Store Manager · Sistema de Gestión de Tienda de Ropa</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">Fashion Store Manager</div>', unsafe_allow_html=True)
