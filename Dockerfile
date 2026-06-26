@@ -14,17 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Código de la app
 COPY app.py database.py gestor.py ./
-COPY seed_db.py ./
-
-# Puerto
-EXPOSE 8501
-
-# Seed al construir
-RUN DB_PATH=/app/data/tienda.db python3 seed_db.py
 
 # Arranque
-CMD DB_PATH=/app/data/tienda.db streamlit run app.py \
+CMD streamlit run app.py \
     --server.headless true \
     --server.address 0.0.0.0 \
-    --server.port 8501 \
+    --server.port ${PORT:-8501} \
     --browser.gatherUsageStats false
